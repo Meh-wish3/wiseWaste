@@ -21,16 +21,38 @@ const userSchema = new mongoose.Schema({
         enum: ['CITIZEN', 'COLLECTOR', 'ADMIN'],
         required: true,
     },
-    // Role-specific fields
+
+    // Citizen-specific fields
+    houseNumber: {
+        type: String,
+        // Required for CITIZEN role - e.g., "H001", "A-123"
+    },
+    area: {
+        type: String,
+        // Specific area within ward - e.g., "Bhetapara - Lane 1"
+    },
+    location: {
+        lat: { type: Number },
+        lng: { type: Number },
+    },
+
+    // Ward number - used by both CITIZEN and COLLECTOR
+    wardNumber: {
+        type: String,
+        // Required for both CITIZEN and COLLECTOR roles
+        index: true,
+    },
+
+    // Legacy fields (kept for backward compatibility)
     householdId: {
         type: String,
-        // Required for CITIZEN role
+        // Optional - legacy field
     },
     assignedWard: {
         type: String,
-        // For COLLECTOR role
-        default: 'Ward 4',
+        // Legacy field for COLLECTOR role
     },
+
     createdAt: {
         type: Date,
         default: Date.now,

@@ -1,22 +1,37 @@
 const PickupRequest = require('../models/PickupRequest');
-const { addIncentivePoints } = require('../services/incentiveService');
+const User = require('../models/User');
+const { addIncentivePoints, penalizeUser } = require('../services/incentiveService');
 
 async function createPickupRequest(req, res, next) {
   try {
-    const { householdId, wasteType, pickupTime, overflow, location } = req.body;
+    const { wasteType, pickupTime, overflow, location } = req.body;
 
-    if (!householdId || !wasteType || !pickupTime) {
+    if (!wasteType || !pickupTime) {
       return res
         .status(400)
-        .json({ message: 'householdId, wasteType and pickupTime are required' });
+        .json({ message: 'wasteType and pickupTime are required' });
+    }
+
+    // Get user details to populate pickup request
+    const user = await User.findById(req.user.userId);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (user.role !== 'CITIZEN') {
+      return res.status(403).json({ message: 'Only citizens can create pickup requests' });
     }
 
     const pickup = await PickupRequest.create({
-      householdId,
+      userId: user._id,
+      houseNumber: user.houseNumber,
+      wardNumber: user.wardNumber,
+      area: user.area,
       wasteType,
       pickupTime,
       overflow: !!overflow,
-      location: location && location.lat && location.lng ? location : undefined,
+      // Use provided location or fallback to user's registered location
+      location: location && location.lat && location.lng ? location : user.location,
     });
 
     res.status(201).json(pickup);
@@ -27,36 +42,29 @@ async function createPickupRequest(req, res, next) {
 
 async function listPickupRequests(req, res, next) {
   try {
-    const { status, householdId } = req.query;
+    const { status } = req.query;
     const filter = {};
+
     if (status) filter.status = status;
-    if (householdId) filter.householdId = householdId;
+
+    // Filter based on user role
+    if (req.user) {
+      const user = await User.findById(req.user.userId);
+
+      if (user.role === 'CITIZEN') {
+        // Citizens see only their own pickups
+        filter.userId = user._id;
+      } else if (user.role === 'COLLECTOR') {
+        // Collectors see only pickups from their ward
+        filter.wardNumber = user.wardNumber;
+      }
+      // Admins see all pickups (no additional filter)
+    }
 
     const pickups = await PickupRequest.find(filter)
       .sort({ pickupTime: 1 })
+      .populate('userId', 'name email houseNumber')
       .lean();
-
-    // Enrich with household area info for collector view
-    if (status === 'pending' || !status) {
-      const Household = require('../models/Household');
-      const householdIds = [...new Set(pickups.map((p) => p.householdId))];
-      const households = await Household.find({
-        householdId: { $in: householdIds },
-      }).lean();
-
-      const householdMap = households.reduce((acc, h) => {
-        acc[h.householdId] = h;
-        return acc;
-      }, {});
-
-      const enriched = pickups.map((p) => ({
-        ...p,
-        area: householdMap[p.householdId]?.area || 'Unknown',
-        householdLocation: householdMap[p.householdId]?.location || null,
-      }));
-
-      return res.json(enriched);
-    }
 
     res.json(pickups);
   } catch (err) {
@@ -67,14 +75,28 @@ async function listPickupRequests(req, res, next) {
 async function verifySegregation(req, res, next) {
   try {
     const { id } = req.params;
-    const { verified } = req.body;
+    const { verified, verificationStatus } = req.body;
 
     const pickup = await PickupRequest.findById(id);
     if (!pickup) {
       return res.status(404).json({ message: 'Pickup request not found' });
     }
 
-    pickup.segregationVerified = verified === true;
+    // Handle Segregation Verification
+    if (verified !== undefined) {
+      pickup.segregationVerified = verified === true;
+    }
+
+    // Handle Anti-Abuse Verification
+    if (verificationStatus) {
+      pickup.verificationStatus = verificationStatus;
+
+      // Check for policy violation (False Alarm)
+      if (verificationStatus === 'false_alarm' && pickup.overflow) {
+        await penalizeUser(pickup.userId, 'False Priority Alarm');
+      }
+    }
+
     await pickup.save();
 
     res.json({ pickup });
@@ -94,15 +116,53 @@ async function completePickup(req, res, next) {
 
     pickup.status = 'completed';
     pickup.completedBy = req.user.userId;
+
+    // Fix: Do not blindly auto-verify if it was marked as a false alarm
+    if (pickup.verificationStatus === 'false_alarm') {
+      pickup.segregationVerified = false;
+    } else if (!pickup.segregationVerified) {
+      // Only auto-verify if not already verified/rejected (and not a false alarm)
+      pickup.segregationVerified = true;
+    }
+
     await pickup.save();
 
-    // Award points only if segregation was verified
+    // Award points using userId instead of householdId
     let incentive = null;
     if (pickup.segregationVerified) {
-      incentive = await addIncentivePoints(pickup.householdId, pickup.wasteType);
+      incentive = await addIncentivePoints(pickup.userId, pickup.wasteType);
     }
 
     res.json({ pickup, incentive });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function cancelPickup(req, res, next) {
+  try {
+    const { id } = req.params;
+    const pickup = await PickupRequest.findById(id);
+
+    if (!pickup) {
+      return res.status(404).json({ message: 'Pickup not found' });
+    }
+
+    // Verify ownership
+    if (pickup.userId.toString() !== req.user.userId) {
+      return res.status(403).json({ message: 'Unauthorized' });
+    }
+
+    if (pickup.status === 'completed') {
+      return res.status(400).json({ message: 'Cannot cancel completed pickup' });
+    }
+
+    // Allow cancelling assigned pickups too, but maybe notify collector? 
+    // For now just allow it.
+    pickup.status = 'cancelled';
+    await pickup.save();
+
+    res.json({ message: 'Pickup cancelled successfully', pickup });
   } catch (err) {
     next(err);
   }
@@ -113,5 +173,6 @@ module.exports = {
   listPickupRequests,
   verifySegregation,
   completePickup,
+  cancelPickup
 };
 

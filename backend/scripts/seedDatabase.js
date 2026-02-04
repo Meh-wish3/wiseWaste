@@ -8,6 +8,7 @@ const Household = require('../models/Household');
 const Collector = require('../models/Collector');
 const PickupRequest = require('../models/PickupRequest');
 const Incentive = require('../models/Incentive');
+const { seedUsers } = require('./seedUsers');
 
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
@@ -35,7 +36,10 @@ async function seed() {
     await Household.insertMany(households);
     await Collector.insertMany(collectors);
 
-    console.log('Database seeded with households and collectors.');
+    console.log('✅ Database seeded with households and collectors.');
+    
+    // Seed test users for authentication
+    await seedUsers();
   } catch (err) {
     console.error('Seeding error:', err);
   } finally {

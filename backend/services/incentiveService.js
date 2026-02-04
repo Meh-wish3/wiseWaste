@@ -7,12 +7,24 @@ const POINTS_TABLE = {
   'e-waste': 15,
 };
 
-async function addIncentivePoints(householdId, wasteType) {
+async function addIncentivePoints(userId, wasteType) {
   const increment = POINTS_TABLE[wasteType] || 5;
 
   const incentive = await Incentive.findOneAndUpdate(
-    { householdId },
+    { userId },
     { $inc: { points: increment } },
+    { new: true, upsert: true }
+  );
+
+  return incentive;
+}
+
+async function penalizeUser(userId, reason) {
+  const penalty = -50; // Fixed penalty for false alarms
+
+  const incentive = await Incentive.findOneAndUpdate(
+    { userId },
+    { $inc: { points: penalty } },
     { new: true, upsert: true }
   );
 
@@ -21,6 +33,7 @@ async function addIncentivePoints(householdId, wasteType) {
 
 module.exports = {
   addIncentivePoints,
+  penalizeUser,
   POINTS_TABLE,
 };
 

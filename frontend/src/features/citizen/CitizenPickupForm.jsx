@@ -1,10 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import {
-  fetchHouseholds,
-  createPickup,
-  fetchIncentives,
-} from './CitizenApi';
-import { Droplets, Trash2, Battery, AlertTriangle, Clock, MapPin, CheckCircle2, Ticket } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
+import { createPickup, fetchIncentives } from './CitizenApi';
+import { Droplets, Trash2, Battery, AlertTriangle, Clock, MapPin, CheckCircle2, Ticket, Home, RefreshCw } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 const wasteTypeOptions = [
@@ -32,8 +29,7 @@ const wasteTypeOptions = [
 ];
 
 const CitizenPickupForm = () => {
-  const [households, setHouseholds] = useState([]);
-  const [selectedHousehold, setSelectedHousehold] = useState('');
+  const { user } = useAuth();
   const [wasteType, setWasteType] = useState('wet');
   const [pickupTime, setPickupTime] = useState('');
   const [overflow, setOverflow] = useState(false);
@@ -41,32 +37,20 @@ const CitizenPickupForm = () => {
   const [message, setMessage] = useState('');
   const [points, setPoints] = useState(0);
   const [location, setLocation] = useState(null);
-  const [locationStatus, setLocationStatus] = useState('idle'); // idle, requesting, granted, denied, fallback
-  const [useManualArea, setUseManualArea] = useState(false);
+  const [locationStatus, setLocationStatus] = useState('idle');
 
+  // Fetch user's incentive points on mount
   useEffect(() => {
-    fetchHouseholds()
-      .then((data) => {
-        setHouseholds(data);
-        if (data.length) {
-          setSelectedHousehold(data[0].householdId);
-        }
-      })
-      .catch(() => {
-        setMessage('Failed to load households. Check backend.');
-      });
-  }, []);
+    if (user) {
+      fetchIncentives('me')
+        .then((data) => setPoints(data.points || 0))
+        .catch(() => { });
+    }
+  }, [user]);
 
+  // Request geolocation on component mount
   useEffect(() => {
-    if (!selectedHousehold) return;
-    fetchIncentives(selectedHousehold)
-      .then((data) => setPoints(data.points || 0))
-      .catch(() => { });
-  }, [selectedHousehold]);
-
-  // Request geolocation on component mount or when household changes
-  useEffect(() => {
-    if (!selectedHousehold || useManualArea) return;
+    if (!user) return;
 
     if ('geolocation' in navigator) {
       setLocationStatus('requesting');
@@ -81,10 +65,9 @@ const CitizenPickupForm = () => {
         (error) => {
           console.warn('Geolocation denied or failed:', error);
           setLocationStatus('denied');
-          // Fallback: use household's area location if available
-          const household = households.find((h) => h.householdId === selectedHousehold);
-          if (household?.location?.lat && household?.location?.lng) {
-            setLocation(household.location);
+          // Fallback: use user's registered location if available
+          if (user.location?.lat && user.location?.lng) {
+            setLocation(user.location);
             setLocationStatus('fallback');
           }
         },
@@ -92,35 +75,32 @@ const CitizenPickupForm = () => {
       );
     } else {
       setLocationStatus('denied');
-      const household = households.find((h) => h.householdId === selectedHousehold);
-      if (household?.location?.lat && household?.location?.lng) {
-        setLocation(household.location);
+      if (user.location?.lat && user.location?.lng) {
+        setLocation(user.location);
         setLocationStatus('fallback');
       }
     }
-  }, [selectedHousehold, households, useManualArea]);
+  }, [user]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!selectedHousehold || !pickupTime) return;
+    if (!pickupTime) return;
     setSubmitting(true);
     setMessage('');
     try {
       await createPickup({
-        householdId: selectedHousehold,
         wasteType,
         pickupTime,
         overflow,
-        location, // Include location if available
+        location,
       });
 
-      // Refresh points after successful submission
-      fetchIncentives(selectedHousehold)
+      // Refresh points
+      fetchIncentives('me')
         .then((data) => setPoints(data.points || 0))
         .catch(() => { });
 
       setMessage('Pickup scheduled successfully! Location shared with collector.');
-      // Reset form
       setPickupTime('');
       setOverflow(false);
     } catch (err) {
@@ -131,112 +111,47 @@ const CitizenPickupForm = () => {
   };
 
   return (
-    <div className="grid gap-6 lg:grid-cols-3">
-      <section className="card lg:col-span-2 shadow-lg border border-gray-100/50">
-        <h2 className="font-heading text-xl font-bold text-primary mb-2 flex items-center gap-2">
-          <Clock size={20} className="text-secondary" />
-          Schedule Pickup
-        </h2>
-        <p className="text-sm text-slate-500 mb-6">
-          Ward workers will visit your household based on this request. Please ensure correct segregation.
-        </p>
+    <div className="grid gap-8 lg:grid-cols-3 items-start animate-fade-in-up">
+      {/* Form Section */}
+      <section className="card lg:col-span-2 shadow-xl shadow-slate-200/50 border-0 ring-1 ring-slate-100 bg-white/80 backdrop-blur-sm relative overflow-hidden">
+        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-primary to-emerald-400" />
 
-        <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Household Selection */}
+        <div className="mb-6">
+          <h2 className="font-heading text-xl font-bold text-slate-800 flex items-center gap-2">
+            Schedule a Pickup
+          </h2>
+          <p className="text-sm text-slate-500">
+            Select waste type and time. Ward workers will arrive at your location.
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-8">
+          {/* Waste Type Selection */}
           <div>
-            <label className="block text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
-              <MapPin size={16} className="text-emerald-500" />
-              Select Household
+            <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">
+              Step 1: Select Waste Type
             </label>
-            <div className="relative">
-              <select
-                value={selectedHousehold}
-                onChange={(e) => {
-                  setSelectedHousehold(e.target.value);
-                  setUseManualArea(false);
-                }}
-                className="w-full rounded-2xl border border-gray-200 bg-gray-50/50 px-4 py-3 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all appearance-none cursor-pointer hover:bg-white"
-              >
-                {households.map((h) => (
-                  <option key={h.householdId} value={h.householdId}>
-                    {h.householdId} – {h.headName} ({h.area})
-                  </option>
-                ))}
-              </select>
-              <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
-                ▼
-              </div>
-            </div>
-
-            {/* Location Status */}
-            <div className="mt-2 text-xs">
-              {locationStatus === 'requesting' && (
-                <p className="text-blue-600 flex items-center gap-1">
-                  <MapPin size={12} /> Requesting location...
-                </p>
-              )}
-              {locationStatus === 'granted' && location && (
-                <p className="text-emerald-600 flex items-center gap-1">
-                  <CheckCircle2 size={12} /> Location shared: {location.lat.toFixed(4)}, {location.lng.toFixed(4)}
-                </p>
-              )}
-              {locationStatus === 'denied' && (
-                <div className="flex items-center gap-2">
-                  <p className="text-amber-600 flex items-center gap-1">
-                    <AlertTriangle size={12} /> Location access denied
-                  </p>
-                  {!useManualArea && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setUseManualArea(true);
-                        const household = households.find((h) => h.householdId === selectedHousehold);
-                        if (household?.location) {
-                          setLocation(household.location);
-                          setLocationStatus('fallback');
-                        }
-                      }}
-                      className="text-primary underline text-xs"
-                    >
-                      Use area location
-                    </button>
-                  )}
-                </div>
-              )}
-              {locationStatus === 'fallback' && location && (
-                <p className="text-slate-500 flex items-center gap-1">
-                  <MapPin size={12} /> Using area location: {location.lat.toFixed(4)}, {location.lng.toFixed(4)}
-                </p>
-              )}
-            </div>
-          </div>
-
-          {/* Waste Type Grid */}
-          <div>
-            <label className="block text-sm font-semibold text-slate-700 mb-3">
-              Type of Waste
-            </label>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {wasteTypeOptions.map((opt) => {
                 const isSelected = wasteType === opt.value;
                 return (
                   <motion.button
                     key={opt.value}
                     type="button"
-                    whileHover={{ scale: 1.02 }}
+                    whileHover={{ y: -2 }}
                     whileTap={{ scale: 0.98 }}
                     onClick={() => setWasteType(opt.value)}
-                    className={`relative p-4 rounded-2xl border-2 text-left transition-all duration-200 flex flex-col gap-2 ${isSelected
-                      ? `border-primary bg-primary/5 shadow-md`
-                      : 'border-transparent bg-gray-50 hover:bg-gray-100'
+                    className={`relative p-4 rounded-2xl border text-left transition-all duration-200 flex flex-col gap-3 group ${isSelected
+                      ? `border-primary/50 ring-2 ring-primary/20 bg-primary/5`
+                      : 'border-slate-200 bg-white hover:border-primary/30 hover:shadow-md'
                       }`}
                   >
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${isSelected ? 'bg-primary text-white' : 'bg-white text-slate-400'
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors ${isSelected ? 'bg-primary text-white shadow-lg shadow-primary/30' : 'bg-slate-100 text-slate-400 group-hover:bg-primary/10 group-hover:text-primary'
                       }`}>
                       {isSelected ? <CheckCircle2 size={20} /> : opt.icon}
                     </div>
                     <div>
-                      <p className={`font-bold text-sm ${isSelected ? 'text-primary' : 'text-slate-700'}`}>
+                      <p className={`font-bold text-sm mb-0.5 ${isSelected ? 'text-primary' : 'text-slate-700'}`}>
                         {opt.label}
                       </p>
                       <p className="text-xs text-slate-500">{opt.desc}</p>
@@ -248,113 +163,159 @@ const CitizenPickupForm = () => {
           </div>
 
           {/* Time & Overflow */}
-          <div className="grid sm:grid-cols-2 gap-5">
-            <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-2">
-                Preferred Time
-              </label>
-              <input
-                type="datetime-local"
-                value={pickupTime}
-                onChange={(e) => setPickupTime(e.target.value)}
-                className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all"
-              />
-            </div>
-
-            <div
-              className={`rounded-2xl border-2 p-4 cursor-pointer transition-all duration-200 flex items-start gap-3 ${overflow
-                ? 'border-red-400 bg-red-50'
-                : 'border-dashed border-gray-300 hover:border-red-300 hover:bg-red-50/30'
-                }`}
-              onClick={() => setOverflow(!overflow)}
-            >
-              <div className={`mt-0.5 p-1.5 rounded-full ${overflow ? 'bg-red-500 text-white' : 'bg-gray-200 text-gray-500'}`}>
-                <AlertTriangle size={16} />
-              </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">
+              Step 2: Time & Urgency
+            </label>
+            <div className="grid sm:grid-cols-2 gap-5">
               <div>
-                <p className={`text-sm font-bold ${overflow ? 'text-red-700' : 'text-slate-600'}`}>
-                  Report Overflow
-                </p>
-                <p className="text-xs text-slate-500 leading-tight mt-1">
-                  Mark if the bin is full. High priority for collectors.
-                </p>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Preferred Time
+                </label>
+                <div className="relative">
+                  <input
+                    type="datetime-local"
+                    value={pickupTime}
+                    onChange={(e) => setPickupTime(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-sm font-medium text-slate-700 focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">
+                  Bin Status
+                </label>
+                <div
+                  className={`rounded-xl border p-3 cursor-pointer transition-all duration-200 flex items-center gap-3 h-[46px] ${overflow
+                    ? 'border-red-200 bg-red-50 text-red-900 ring-4 ring-red-50'
+                    : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                    }`}
+                  onClick={() => setOverflow(!overflow)}
+                >
+                  <div className={`p-1 rounded-full ${overflow ? 'bg-red-500 text-white' : 'bg-slate-200 text-slate-400'}`}>
+                    <AlertTriangle size={14} />
+                  </div>
+                  <span className={`text-sm font-bold ${overflow ? 'text-red-700' : 'text-slate-600'}`}>
+                    {overflow ? 'Overflow Reported (High Priority)' : 'Standard Fill Level'}
+                  </span>
+                </div>
               </div>
             </div>
+          </div>
+
+          {/* Location Bar */}
+          <div className="bg-slate-50 rounded-xl p-3 flex items-center justify-between border border-slate-100 text-xs text-slate-500">
+            <div className="flex items-center gap-2">
+              <div className={`w-2 h-2 rounded-full ${locationStatus === 'granted' ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`} />
+              {locationStatus === 'granted' ? (
+                <span>GPS Location Acquired</span>
+              ) : locationStatus === 'requesting' ? (
+                <span>Acquiring GPS...</span>
+              ) : (
+                <span>Using Registered Address</span>
+              )}
+            </div>
+            {location && (
+              <span className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200">
+                {location.lat.toFixed(4)}, {location.lng.toFixed(4)}
+              </span>
+            )}
           </div>
 
           {/* Submit Button */}
-          <div className="pt-2">
-            <button
-              type="submit"
-              disabled={submitting || !selectedHousehold || !pickupTime}
-              className="btn-primary w-full h-14 text-base shadow-lg hover:shadow-xl disabled:opacity-50 disabled:shadow-none"
-            >
-              {submitting ? 'Scheduling...' : 'Schedule Pickup Request'}
-            </button>
-          </div>
+          <button
+            type="submit"
+            disabled={submitting || !pickupTime}
+            className="w-full h-14 rounded-xl bg-gradient-to-r from-primary to-emerald-600 text-white font-bold text-lg shadow-lg shadow-emerald-200 hover:shadow-xl hover:scale-[1.01] active:scale-[0.99] transition-all disabled:opacity-50 disabled:shadow-none disabled:transform-none"
+          >
+            {submitting ? (
+              <span className="flex items-center justify-center gap-2">
+                <RefreshCw size={20} className="animate-spin" /> Scheduling...
+              </span>
+            ) : 'Confirm Pickup Request'}
+          </button>
 
           {message && (
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               className={`p-4 rounded-xl text-sm font-medium flex items-center gap-3 ${message.includes('success')
-                ? 'bg-emerald-100 text-emerald-800'
-                : 'bg-red-100 text-red-800'
+                ? 'bg-emerald-50 text-emerald-800 border border-emerald-100'
+                : 'bg-red-50 text-red-800 border border-red-100'
                 }`}
             >
-              {message.includes('success') ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+              {message.includes('success') ? <CheckCircle2 size={18} className="text-emerald-600" /> : <AlertTriangle size={18} className="text-red-600" />}
               {message}
             </motion.div>
           )}
         </form>
       </section>
 
-      {/* Score Card */}
-      <section className="space-y-4">
-        <div className="card bg-gradient-to-br from-primary to-emerald-900 text-white shadow-xl border-none relative overflow-hidden">
-          <div className="absolute top-0 right-0 p-8 opacity-10">
-            <Ticket size={120} />
+      {/* Sidebar / Score Card */}
+      <section className="space-y-6">
+        {/* Eco Card */}
+        <div className="card bg-slate-900 text-white shadow-2xl border-none relative overflow-hidden min-h-[220px] flex flex-col justify-between group">
+          {/* Card Background Effects */}
+          <div className="absolute top-0 right-0 p-12 opacity-5 transform group-hover:scale-110 transition-transform duration-700">
+            <Ticket size={180} />
+          </div>
+          <div className="absolute bottom-0 left-0 w-full h-1/2 bg-gradient-to-t from-emerald-900/50 to-transparent" />
+          <div className="absolute top-0 left-0 w-full h-full bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-20 mix-blend-overlay" />
+
+          {/* Card Header */}
+          <div className="relative z-10 flex justify-between items-start">
+            <div>
+              <p className="text-emerald-400 text-[10px] font-bold uppercase tracking-[0.2em]">Eco-Credits</p>
+              <div className="flex items-baseline gap-1 mt-1">
+                <span className="text-4xl font-mono font-bold tracking-tighter text-white text-shadow-lg">{points}</span>
+                <span className="text-sm text-slate-400">pts</span>
+              </div>
+            </div>
+            <div className="w-8 h-8 rounded-full border border-white/20 flex items-center justify-center">
+              <div className="w-6 h-6 rounded-full bg-gradient-to-br from-emerald-400 to-blue-500 opacity-80" />
+            </div>
           </div>
 
-          <div className="relative z-10">
-            <h3 className="text-emerald-200 text-xs font-bold uppercase tracking-wider mb-1">
-              My Segregation Score
-            </h3>
-            <div className="flex items-baseline gap-1">
-              <span className="text-5xl font-bold tracking-tight">{points}</span>
-              <span className="text-emerald-300 text-sm">pts</span>
-            </div>
+          {/* Card Chip */}
+          <div className="relative z-10 w-10 h-8 rounded bg-gradient-to-br from-amber-200 to-amber-100 border border-amber-300 shadow-inner opacity-80" />
 
-            <div className="mt-6 bg-white/10 backdrop-blur-sm rounded-xl p-3 border border-white/10">
-              <ul className="space-y-2 text-xs text-emerald-50">
-                <li className="flex justify-between">
-                  <span>Wet Waste</span>
-                  <span className="font-bold">+5 pts</span>
-                </li>
-                <li className="flex justify-between">
-                  <span>Dry Waste</span>
-                  <span className="font-bold">+8 pts</span>
-                </li>
-                <li className="flex justify-between">
-                  <span>E-Waste</span>
-                  <span className="font-bold">+15 pts</span>
-                </li>
-              </ul>
+          {/* Card Footer */}
+          <div className="relative z-10">
+            <p className="font-mono text-xs text-slate-400 tracking-widest mb-4">**** **** **** {user?.houseNumber?.slice(0, 4) || '0000'}</p>
+            <div className="flex justify-between items-end">
+              <div>
+                <p className="text-[9px] text-slate-500 uppercase">Card Holder</p>
+                <p className="text-sm font-medium tracking-wide text-slate-200">{user?.name}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-[9px] text-slate-500 uppercase">Cluster</p>
+                <p className="text-xs font-bold text-emerald-400">WARD-{user?.wardNumber}</p>
+              </div>
             </div>
           </div>
         </div>
 
-        <div className="card bg-white border border-lime-100 shadow-sm relative overflow-hidden">
-          <div className="absolute -right-4 -top-4 bg-lime-50 w-24 h-24 rounded-full blur-xl" />
-          <h3 className="font-heading font-bold text-slate-800 flex items-center gap-2 mb-2 relative z-10">
-            <Ticket size={18} className="text-lime-600" />
-            Rewards
+        {/* Info Box */}
+        <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm">
+          <h3 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">
+            <Ticket size={16} className="text-emerald-500" /> Earning Rules
           </h3>
-          <p className="text-xs text-slate-600 leading-relaxed relative z-10">
-            Redeem points for discounts at local partner stores.
-            <br />
-            <span className="italic text-slate-400 mt-2 block">(Currently in demo mode)</span>
-          </p>
+          <ul className="space-y-3 text-xs text-slate-600">
+            <li className="flex justify-between items-center border-b border-slate-50 pb-2">
+              <span className="flex items-center gap-2"><Droplets size={12} className="text-emerald-500" /> Wet Waste</span>
+              <span className="font-bold bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded">+5 pts</span>
+            </li>
+            <li className="flex justify-between items-center border-b border-slate-50 pb-2">
+              <span className="flex items-center gap-2"><Trash2 size={12} className="text-blue-500" /> Dry Waste</span>
+              <span className="font-bold bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded">+8 pts</span>
+            </li>
+            <li className="flex justify-between items-center">
+              <span className="flex items-center gap-2"><Battery size={12} className="text-amber-500" /> E-Waste</span>
+              <span className="font-bold bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded">+15 pts</span>
+            </li>
+          </ul>
         </div>
       </section>
     </div>
@@ -362,4 +323,3 @@ const CitizenPickupForm = () => {
 };
 
 export default CitizenPickupForm;
-

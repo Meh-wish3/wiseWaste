@@ -8,9 +8,10 @@ const JWT_EXPIRES_IN = '7d';
 // Register new user
 async function register(req, res, next) {
     try {
-        const { email, password, name, role, householdId } = req.body;
+        console.log('Registration request received:', req.body);
+        const { email, password, name, role, houseNumber, wardNumber, area, location } = req.body;
 
-        // Validation
+        // Basic validation
         if (!email || !password || !name || !role) {
             return res.status(400).json({
                 message: 'Email, password, name, and role are required'
@@ -24,24 +25,42 @@ async function register(req, res, next) {
         }
 
         // Validate role-specific requirements
-        if (role === 'CITIZEN' && !householdId) {
-            return res.status(400).json({
-                message: 'Household ID is required for citizen registration'
-            });
+        if (role === 'CITIZEN') {
+            if (!houseNumber || !wardNumber) {
+                return res.status(400).json({
+                    message: 'House number and ward number are required for citizen registration'
+                });
+            }
+        }
+
+        if (role === 'COLLECTOR') {
+            if (!wardNumber) {
+                return res.status(400).json({
+                    message: 'Ward number is required for collector registration'
+                });
+            }
         }
 
         // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // Create user
-        const user = await User.create({
+        // Create user with role-specific fields
+        const userData = {
             email,
             password: hashedPassword,
             name,
             role,
-            householdId: role === 'CITIZEN' ? householdId : undefined,
-            assignedWard: role === 'COLLECTOR' ? 'Ward 4' : undefined,
-        });
+            wardNumber,
+        };
+
+        // Add citizen-specific fields
+        if (role === 'CITIZEN') {
+            userData.houseNumber = houseNumber;
+            userData.area = area;
+            userData.location = location;
+        }
+
+        const user = await User.create(userData);
 
         // Generate token
         const token = jwt.sign(
@@ -57,10 +76,14 @@ async function register(req, res, next) {
                 email: user.email,
                 name: user.name,
                 role: user.role,
-                householdId: user.householdId,
+                houseNumber: user.houseNumber,
+                wardNumber: user.wardNumber,
+                area: user.area,
+                location: user.location,
             },
         });
     } catch (err) {
+        console.error('Registration error:', err);
         next(err);
     }
 }
@@ -102,8 +125,10 @@ async function login(req, res, next) {
                 email: user.email,
                 name: user.name,
                 role: user.role,
-                householdId: user.householdId,
-                assignedWard: user.assignedWard,
+                houseNumber: user.houseNumber,
+                wardNumber: user.wardNumber,
+                area: user.area,
+                location: user.location,
             },
         });
     } catch (err) {
@@ -124,8 +149,10 @@ async function me(req, res, next) {
             email: user.email,
             name: user.name,
             role: user.role,
-            householdId: user.householdId,
-            assignedWard: user.assignedWard,
+            houseNumber: user.houseNumber,
+            wardNumber: user.wardNumber,
+            area: user.area,
+            location: user.location,
         });
     } catch (err) {
         next(err);

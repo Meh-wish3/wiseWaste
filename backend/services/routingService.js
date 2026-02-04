@@ -1,84 +1,127 @@
-const Household = require('../models/Household');
 const PickupRequest = require('../models/PickupRequest');
+const { getDistanceInKm } = require('../utils/geoUtils');
 
-// Static area traversal order to keep routing explainable.
-// This is a simple heuristic: collector starts near the ward office
-// and moves area-by-area in a fixed loop.
-const AREA_ORDER = [
-  'Bhetapara - Lane 1',
-  'Bhetapara - Lane 2',
-  'Bhetapara - Lane 3',
-  'Bhangagarh - Block A',
-  'Bhangagarh - Block B',
-  'GS Road - Point 1',
-  'GS Road - Point 2',
-  'GS Road - Point 3',
-  'Beltola - Market Side',
-  'Beltola - Residential Cluster',
-];
+// Optional: Define centers for wards to start the route
+// using a default central point for Guwahati/Example if specific ward center is unknown
+const DEFAULT_START_LOCATION = { lat: 26.1445, lng: 91.7362 }; // Example: Bhetapara
 
-function getAreaRank(area) {
-  const idx = AREA_ORDER.indexOf(area);
-  if (idx === -1) return AREA_ORDER.length + 1;
-  return idx;
-}
+async function generateShiftRoute(wardNumber, collectorId) {
+  // 1. Fetch pending pickups OR pickups already assigned to this collector
+  // Fix: Assign pickups to avoid race conditions between collectors
+  const query = {
+    wardNumber: wardNumber,
+    $or: [
+      { status: 'pending' },
+      { status: 'assigned', assignedTo: collectorId }
+    ]
+  };
 
-async function generateShiftRoute() {
-  // 1. Fetch all pending pickup requests for the current shift (simplified: all pending).
-  const pendingPickups = await PickupRequest.find({ status: 'pending' }).lean();
-  if (!pendingPickups.length) return [];
+  const allPickups = await PickupRequest.find(query).lean();
 
-  // 2. Get all involved households to know their areas.
-  const householdIds = [...new Set(pendingPickups.map((p) => p.householdId))];
-  const households = await Household.find({
-    householdId: { $in: householdIds },
-  }).lean();
+  if (!allPickups.length) return [];
 
-  const householdById = households.reduce((acc, h) => {
-    acc[h.householdId] = h;
-    return acc;
-  }, {});
+  // 2. Assign any 'pending' pickups to this collector immediately
+  const pendingIds = allPickups
+    .filter(p => p.status === 'pending')
+    .map(p => p._id);
 
-  // 3. Enrich pickup requests with area info.
-  // Prefer location from pickup request (citizen's geolocation), fallback to household location
-  const enriched = pendingPickups.map((p) => {
-    const h = householdById[p.householdId];
-    return {
-      ...p,
-      area: h ? h.area : 'Unknown',
-      location: p.location && p.location.lat && p.location.lng 
-        ? p.location  // Use citizen's geolocation if available
-        : (h && h.location ? h.location : null), // Fallback to household area location
-    };
+  if (pendingIds.length > 0) {
+    await PickupRequest.updateMany(
+      { _id: { $in: pendingIds } },
+      { $set: { status: 'assigned', assignedTo: collectorId } }
+    );
+    // Update local objects to reflect change
+    allPickups.forEach(p => {
+      if (p.status === 'pending') {
+        p.status = 'assigned';
+        p.assignedTo = collectorId;
+      }
+    });
+  }
+
+  // 3. Separate into Priority (Overflow) and Standard queues
+  const priorityPickups = [];
+  const standardPickups = [];
+
+  allPickups.forEach(p => {
+    if (p.overflow) {
+      priorityPickups.push(p);
+    } else {
+      standardPickups.push(p);
+    }
   });
 
-  // 4. Sort by (area rank, pickupTime asc) – greedy, explainable heuristic.
-  enriched.sort((a, b) => {
-    const areaDiff = getAreaRank(a.area) - getAreaRank(b.area);
-    if (areaDiff !== 0) return areaDiff;
-    return new Date(a.pickupTime) - new Date(b.pickupTime);
-  });
+  // 3. Optimize Paths using Nearest Neighbor Heuristic
+  // Start mainly from a default location or the first item
+  // In a real app, this would be the collector's live location
+  let currentLocation = DEFAULT_START_LOCATION;
 
-  // 5. Prepare ordered route steps with simple explanation.
-  const route = enriched.map((p, index) => ({
+  // Helper function: Greedy Nearest Neighbor Sort
+  const sortNearestNeighbor = (items, startLoc) => {
+    if (!items.length) return { sorted: [], endLoc: startLoc };
+
+    const sorted = [];
+    const remaining = [...items];
+    let currentLoc = startLoc;
+
+    while (remaining.length > 0) {
+      let nearestIdx = -1;
+      let minDist = Infinity;
+
+      remaining.forEach((item, idx) => {
+        // If item has no location, distance is Infinity (will be picked last or sequentially)
+        const dist = getDistanceInKm(currentLoc, item.location);
+
+        if (dist < minDist) {
+          minDist = dist;
+          nearestIdx = idx;
+        }
+      });
+
+      // If all remaining have infinite distance (no coords), pick the first one
+      if (nearestIdx === -1) nearestIdx = 0;
+
+      const nextItem = remaining[nearestIdx];
+      sorted.push(nextItem);
+      remaining.splice(nearestIdx, 1);
+
+      // Update current location if valid
+      if (nextItem.location && nextItem.location.lat) {
+        currentLoc = nextItem.location;
+      }
+    }
+    return { sorted, endLoc: currentLoc };
+  };
+
+  // Optimize Priority Queue first
+  const priorityResult = sortNearestNeighbor(priorityPickups, currentLocation);
+
+  // Optimize Standard Queue starting from where Priority Queue ended
+  const standardResult = sortNearestNeighbor(standardPickups, priorityResult.endLoc);
+
+  // 4. Combine Routes
+  const finalRoute = [...priorityResult.sorted, ...standardResult.sorted];
+
+  // 5. Format Output
+  return finalRoute.map((p, index) => ({
     sequence: index + 1,
     pickupId: p._id,
-    householdId: p.householdId,
-    area: p.area,
+    userId: p.userId,
+    houseNumber: p.houseNumber,
+    wardNumber: p.wardNumber,
+    area: p.area || 'Unknown',
     wasteType: p.wasteType,
     pickupTime: p.pickupTime,
     overflow: p.overflow,
+    verificationStatus: p.verificationStatus,
     location: p.location,
-    explanation: `Visit ${p.area} (household ${p.householdId}) as stop #${
-      index + 1
-    } to reduce back-and-forth between areas.`,
+    explanation: p.overflow
+      ? `Priority Stop: Reported Overflow. Please verify upon arrival.`
+      : `Optimized Stop: Shortest path from previous location.`,
   }));
-
-  return route;
 }
 
 module.exports = {
   generateShiftRoute,
-  AREA_ORDER,
 };
 

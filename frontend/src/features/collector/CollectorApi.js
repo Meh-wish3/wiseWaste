@@ -1,7 +1,8 @@
 import api from '../../api/apiClient';
 
 export const fetchShiftPickups = async () => {
-  const res = await api.get('/pickups', { params: { status: 'pending' } });
+  // Fetch all pickups (pending, assigned, completed) for the ward
+  const res = await api.get('/pickups');
   return res.data;
 };
 
@@ -10,10 +11,8 @@ export const generateRoute = async () => {
   return res.data;
 };
 
-export const verifySegregation = async (id, { verified }) => {
-  const res = await api.patch(`/pickups/${id}/verify`, {
-    verified,
-  });
+export const verifySegregation = async (id, data) => {
+  const res = await api.patch(`/pickups/${id}/verify`, data);
   return res.data;
 };
 

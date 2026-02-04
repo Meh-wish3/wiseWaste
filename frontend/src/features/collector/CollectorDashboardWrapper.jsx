@@ -21,7 +21,7 @@ const CollectorDashboardWrapper = () => {
                     <div className="flex items-center justify-between">
                         <div>
                             <h1 className="text-2xl font-heading font-bold text-primary">Collector Dashboard</h1>
-                            <p className="text-sm text-slate-500 mt-1">{user?.assignedWard || 'Ward 4'} - Pickup Management</p>
+                            <p className="text-sm text-slate-500 mt-1">Ward {user?.wardNumber || '4'} - Pickup Management</p>
                         </div>
                         <div className="flex items-center gap-4">
                             <div className="text-right">

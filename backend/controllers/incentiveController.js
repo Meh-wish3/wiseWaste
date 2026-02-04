@@ -1,16 +1,17 @@
 const Incentive = require('../models/Incentive');
 
-async function getIncentiveForHousehold(req, res, next) {
+async function getIncentiveForUser(req, res, next) {
   try {
-    const { householdId } = req.params;
-    const incentive = await Incentive.findOne({ householdId });
-    res.json(incentive || { householdId, points: 0 });
+    // Get userId from authenticated user or from params
+    const userId = req.params.userId || req.user.userId;
+    const incentive = await Incentive.findOne({ userId });
+    res.json(incentive || { userId, points: 0 });
   } catch (err) {
     next(err);
   }
 }
 
 module.exports = {
-  getIncentiveForHousehold,
+  getIncentiveForUser,
 };
 
